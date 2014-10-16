@@ -662,6 +662,52 @@ lineprof(VALUE self, VALUE filename)
   return ret;
 }
 
+static VALUE
+rblineprof_begin(VALUE self, VALUE regex)
+{
+  if (rblineprof.enabled)
+    rb_raise(rb_eArgError, "already enabled");
+
+  rblineprof.source_regex = regex;
+  rblineprof.source_filename = NULL;
+
+  // reset state
+  st_foreach(rblineprof.files, cleanup_files, 0);
+  if (rblineprof.file.lines) {
+    xfree(rblineprof.file.lines);
+    rblineprof.file.lines = NULL;
+    rblineprof.file.nlines = 0;
+  }
+  rblineprof.cache.file = NULL;
+  rblineprof.cache.srcfile = NULL;
+
+  rblineprof.enabled = true;
+#ifndef RUBY_VM
+  rb_add_event_hook((rb_event_hook_func_t) profiler_hook, RUBY_EVENT_CALL|RUBY_EVENT_RETURN|RUBY_EVENT_C_CALL|RUBY_EVENT_C_RETURN);
+#else
+  rb_add_event_hook((rb_event_hook_func_t) profiler_hook, RUBY_EVENT_CALL|RUBY_EVENT_RETURN|RUBY_EVENT_C_CALL|RUBY_EVENT_C_RETURN, Qnil);
+#endif
+}
+
+static VALUE
+rblineprof_end(VALUE self)
+{
+  if (!rblineprof.enabled)
+    rb_raise(rb_eArgError, "disabled");
+
+  lineprof_ensure(self);
+
+  VALUE ret = rb_hash_new();
+
+  if (rblineprof.source_filename) {
+    summarize_files(Qnil, (st_data_t)&rblineprof.file, ret);
+  } else {
+    st_foreach(rblineprof.files, summarize_files, ret);
+  }
+
+  return ret;
+}
+
 static void
 rblineprof_gc_mark()
 {
@@ -678,6 +724,10 @@ Init_rblineprof()
 
   rblineprof.files = st_init_strtable();
   rb_define_global_function("lineprof", lineprof, 1);
+
+  VALUE rblineprof_class = rb_define_class("RbLineProf", rb_cObject);
+  rb_define_singleton_method(rblineprof_class, "begin", rblineprof_begin, 1);
+  rb_define_singleton_method(rblineprof_class, "end", rblineprof_end, 0);
 }
 
 /* vim: set ts=2 sw=2 expandtab: */
